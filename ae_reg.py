@@ -19,7 +19,7 @@ plt.style.use("seaborn-v0_8-poster")
 
 
 class MyDataset(pl.LightningDataModule):
-    def __init__(self, path, batch_size, dataset):
+    def __init__(self, path, batch_size, dataset, augment):
         super().__init__()
         self.path = path
         self.batch_size = batch_size
@@ -30,15 +30,25 @@ class MyDataset(pl.LightningDataModule):
             self.val_transform = v2.ToDtype(torch.float32, scale=True)
             self.shape = (3, 32, 32)
         elif "Imagenet" in dataset:
-            self.train_transform = v2.Compose(
-                [
-                    v2.PILToTensor(),
-                    v2.RandomResizedCrop(size=224, scale=(0.5, 1)),
-                    v2.RandomHorizontalFlip(p=0.5),
-                    v2.RandomGrayscale(p=0.2),
-                    v2.ToDtype(torch.float32, scale=True),
-                ]
-            )
+            if augment:
+                self.train_transform = v2.Compose(
+                    [
+                        v2.PILToTensor(),
+                        v2.RandomResizedCrop(size=224, scale=(0.5, 1)),
+                        v2.RandomHorizontalFlip(p=0.5),
+                        v2.RandomGrayscale(p=0.2),
+                        v2.ToDtype(torch.float32, scale=True),
+                    ]
+                )
+            else:
+                self.train_transform = v2.Compose(
+                    [
+                        v2.PILToTensor(),
+                        v2.Resize(256),
+                        v2.CenterCrop(224),
+                        v2.ToDtype(torch.float32, scale=True),
+                    ]
+                )
             self.val_transform = v2.Compose(
                 [
                     v2.PILToTensor(),
@@ -118,6 +128,8 @@ class MyLightningModule(omega.pl.Module):
                 torch.nn.ReLU(),
                 torch.nn.Linear(1024, 10),
             )
+            if self.guidance == 0:
+                self.model.decoder.requires_grad_(False)
 
     def create_metrics(self):
         self.train_error = torchmetrics.MeanSquaredError()
@@ -136,20 +148,16 @@ class MyLightningModule(omega.pl.Module):
     def compute_loss(self, batch, batch_idx):
         x, y = batch
         h = self.model.encoder(x)
-        xrec = self.model.decoder(h)
-        rec_loss = torch.nn.functional.mse_loss(xrec, x)
-        self.log("train_rec_loss", rec_loss)
-        if self.guidance == 0:
-            preds = self.probe(h.detach())
-            nl_preds = self.nl_probe(h.detach())
-            sup_loss = torch.nn.functional.cross_entropy(preds, y)
-            nl_sup_loss = torch.nn.functional.cross_entropy(nl_preds, y)
+        preds = self.probe(h)
+        nl_preds = self.nl_probe(h)
+        sup_loss = torch.nn.functional.cross_entropy(preds, y)
+        nl_sup_loss = torch.nn.functional.cross_entropy(nl_preds, y)
+        if self.guidance == 1.0:
+            xrec = self.model.decoder(h)
+            rec_loss = torch.nn.functional.mse_loss(xrec, x)
         else:
-            preds = self.probe(h)
-            nl_preds = self.nl_probe(h)
-            sup_loss = self.guidance * torch.nn.functional.cross_entropy(preds, y)
-            nl_sup_loss = self.guidance * torch.nn.functional.cross_entropy(nl_preds, y)
-
+            rec_loss = 0
+        self.log("train_rec_loss", rec_loss)
         self.acc(preds, y)
         self.nl_acc(nl_preds, y)
         self.log("train_acc", self.acc, on_step=False, on_epoch=True)
@@ -181,11 +189,12 @@ if __name__ == "__main__":
     parser.add_argument("--arch", type=lambda x: x.split(","), default=["MLPAE"])
     parser.add_argument("--plot", action="store_true")
     parser.add_argument("--epochs", type=int, default=300)
-    parser.add_argument("--latent", type=int, default=256)
+    parser.add_argument("--latent", type=int, default=128)
     parser.add_argument("--guidance", type=float, default=0)
     parser.add_argument("--dataset", type=lambda x: x.split(","), default=["CIFAR10"])
     parser.add_argument("--eval", action="store_true")
     parser.add_argument("--corruption", action="store_true")
+    parser.add_argument("--augment", action="store_true")
     args = parser.parse_args()
     guidance = args.guidance
 
@@ -196,18 +205,20 @@ if __name__ == "__main__":
                 path = (
                     args.path
                     / "guidance"
-                    / f"ae_{dataset.upper()}_{arch}_{args.latent}_{guidance}".replace(
+                    / f"ae_{dataset.upper()}_{arch}_{args.augment}__{args.latent}_{guidance}".replace(
                         ".", "-"
                     )
                 )
-                datamodule = MyDataset("../Downloads/", 128, dataset=dataset)
+                datamodule = MyDataset(
+                    "../Downloads/", 128, dataset=dataset, augment=args.augment
+                )
                 if not args.eval:
                     mymodule = MyLightningModule(
                         latent=args.latent,
                         arch=arch,
-                        optimizer="Adam",
-                        weight_decay=0.00,
-                        lr=0.0002,
+                        optimizer="AdamW",
+                        weight_decay=0.0001,
+                        lr=0.0001,
                         # momentum=0.9,
                         scheduler="OneCycleLR",
                         input_shape=datamodule.shape,
@@ -230,7 +241,6 @@ if __name__ == "__main__":
                     del datamodule
                 else:
                     datamodule.setup()
-                    del datamodule.train
                     try:
                         model = MyLightningModule.load_from_checkpoint(
                             path / "checkpoints" / "last.ckpt"
@@ -243,8 +253,7 @@ if __name__ == "__main__":
                     for batch in datamodule.val_dataloader():
                         rec = model.forward(batch[0])
                         break
-                    pick = [i for i in range(16)]
-                    utils.plot_images(rec[pick], "rec_guid_v2.pdf")
+                    utils.plot_images(rec[:16])
                     asdf
                     score[guidance] = utils.linear_evaluation(
                         MyLightningModule, path, datamodule
