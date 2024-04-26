@@ -1,11 +1,8 @@
 import omega
 import torch
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler, LabelEncoder
 import numpy as np
 from torch import nn
 import torch
-import torch.nn as nn
 
 
 def generalized_solution(
@@ -23,9 +20,9 @@ def generalized_solution(
     elif "mask" in noise:
         with torch.no_grad():
             idx = torch.arange(X.shape[0])
-            idx = idx.reshape(image_shape).permute(2, 0, 1).unsqueeze(0)
+            idx = idx.reshape(image_shape).unsqueeze(0)
             patches = torch.nn.functional.unfold(
-                idx.float(), (patch_shape), stride=patch_shape
+                idx.float(), patch_shape, stride=patch_shape
             ).long()
         patches = patches[0].T.numpy()
         p = float(noise.split("-")[1])
@@ -58,7 +55,7 @@ def bilinear_solution(X, Y, K, l):
         M = Y.T @ Y + l * X.T @ X  # this is N x N
         sigma_M, P_M = np.linalg.eigh(M)
         np.clip(sigma_M, 0, None, out=sigma_M)
-        S = (np.sqrt(sigma_M)[:, None] * P_M) @ X.T  # this is N x D
+        S = (np.sqrt(sigma_M)[:, None] * P_M.T) @ X.T  # this is N x D
         _, sigma_A, V_At = np.linalg.svd(S, full_matrices=False)
         sigma_A = np.square(sigma_A, out=sigma_A)
         P_A = V_At.T
@@ -82,15 +79,6 @@ def bilinear_solution(X, Y, K, l):
         Wstar = np.linalg.solve(M, (Vstar.T @ X) @ Y.T)
         Zstar = np.linalg.solve(M, (Vstar.T @ X) @ X.T)
 
-    # from scipy.linalg import eigh, eig
-
-    # XXT = X @ X.T
-    # XYT = X @ Y.T
-    # _, Vstar = eigh(
-    #     XYT @ XYT.T + l * XXT @ XXT,
-    #     b=XXT,
-    #     subset_by_index=[X.shape[0] - K, X.shape[0] - 1],
-    # )
     return Wstar, Zstar, Vstar
 
 
@@ -934,57 +922,15 @@ class MLPAE(nn.Module):
         return self.encoder(x)
 
 
-# def linear_evaluation(module, path, dataset):
-#     try:
-#         model = module.load_from_checkpoint(path / "checkpoints" / "last.ckpt")
-#     except FileNotFoundError:
-#         model = module.load_from_checkpoint(path / "checkpoints" / "last-v1.ckpt")
-#     model.eval()
-#     original = dataset.train.transform
-#     dataset.train.transform = dataset.val.transform
-#     with torch.no_grad():
-#         preds = omega.pl.predict(model, dataset.train_dataloader())
-#         X = torch.cat([p[0] for p in preds]).numpy()
-#         y = torch.cat([p[1] for p in preds]).numpy()
-#     fitter = LogisticRegression(verbose=2, C=np.inf, random_state=0, max_iter=1000)
-#     scaler = StandardScaler(copy=False)
-#     y_encoder = LabelEncoder().fit(y)
-#     fitter.fit(scaler.fit_transform(X), y_encoder.transform(y))
-#     with torch.no_grad():
-#         preds = omega.pl.predict(model, dataset.val_dataloader())
-#         X = torch.cat([p[0] for p in preds]).numpy()
-#         y = torch.cat([p[1] for p in preds]).numpy()
-
-#     score = fitter.score(scaler.transform(X), y_encoder.transform(y))
-#     dataset.train.transform = original
-#     return score
-
-
 def linear_evaluation(module, path, dataset):
     try:
         model = module.load_from_checkpoint(path / "checkpoints" / "last.ckpt")
     except FileNotFoundError:
         model = module.load_from_checkpoint(path / "checkpoints" / "last-v1.ckpt")
     model.eval()
-    # original = dataset.train.transform
-    # dataset.train.transform = dataset.val.transform
     with torch.no_grad():
         preds = omega.pl.predict(model, dataset.train_dataloader())
         print(np.mean(preds))
-        # X = torch.cat([p[0] for p in preds]).numpy()
-        # y = torch.cat([p[1] for p in preds]).numpy()
-    # fitter = LogisticRegression(verbose=2, C=np.inf, random_state=0, max_iter=1000)
-    # scaler = StandardScaler(copy=False)
-    # y_encoder = LabelEncoder().fit(y)
-    # fitter.fit(scaler.fit_transform(X), y_encoder.transform(y))
-    # with torch.no_grad():
-    #     preds = omega.pl.predict(model, dataset.val_dataloader())
-    #     X = torch.cat([p[0] for p in preds]).numpy()
-    #     y = torch.cat([p[1] for p in preds]).numpy()
-
-    # score = fitter.score(scaler.transform(X), y_encoder.transform(y))
-    # dataset.train.transform = original
-    # return score
 
 
 def plot_images(tensor, name=None):

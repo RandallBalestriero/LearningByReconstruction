@@ -4,16 +4,6 @@ import random
 import matplotlib.pyplot as plt
 import utils
 
-random.seed(0)
-np.random.seed(0)
-torch.manual_seed(0)
-N = 256
-D = 512
-K = 4
-
-X = (torch.randn(D, N) > 0).float()
-Y = torch.randn(2, D) @ X / np.sqrt(D)
-
 
 def test_generalized(noise=None, view=1, steps=30000):
 
@@ -39,21 +29,6 @@ def test_generalized(noise=None, view=1, steps=30000):
         optim.step()
         scheduler.step()
         sgd_losses.append(loss.item())
-    # if noise is None:
-    #     M1 = X
-    #     M2 = X @ X.T
-    # elif noise == "normal":
-    #     M1 = X
-    #     M2 = X @ X.T + 0.1**2 * torch.eye(X.size(0))
-    # with torch.no_grad():
-    #     _, Vstar = eigh(
-    #         ((M1 @ X.T) @ (X @ M1.T)).numpy(),
-    #         b=M2.numpy(),
-    #         subset_by_index=[D - K, D - 1],
-    #     )
-    #     print(Vstar.shape)
-    #     Vstar = torch.from_numpy(Vstar)
-    #     Wstar = torch.linalg.solve(Vstar.T @ M2 @ Vstar, Vstar.T @ M1 @ X.T)
     Wstar, Vstar = utils.generalized_solution(K, X.numpy(), noise)
     loss = torch.nn.functional.mse_loss(
         torch.from_numpy(Wstar).float().T @ torch.from_numpy(Vstar).float().T @ Xbatch,
@@ -95,32 +70,44 @@ def test_base(lr, l, steps=50000):
 
 
 if __name__ == "__main__":
-    # sgd_loss, optimal = test_generalized("gaussian-0.1", 10)
 
-    fig, axs = plt.subplots(1, 4, figsize=(15, 5), sharex="all", sharey="all")
-    fig.suptitle("Empirical validation of optimal solution", fontsize=20)
-    for i, l in enumerate([0.0, 0.1, 1, 10]):
-        optim = [np.inf]
-        for lr in [0.1, 0.01, 0.001, 0.0001]:
-            sgd_loss, optimal = test_base(lr, l, 1000)
-            if np.mean(sgd_loss[-300:]) < np.mean(optim[-300:]):
-                optim = sgd_loss
-        axs[i].plot(optim - optimal)
-        axs[i].set_xlabel("steps (t)", fontsize=20)
-        axs[i].set_title(str(np.min(optim - optimal)))
-    axs[0].set_yscale("log")
-    axs[0].set_ylabel("log(loss(t) - loss*)", fontsize=20)
+    N = 256
+
+    for D in [16, 512]:
+        for K in [3, 16]:
+            random.seed(0)
+            np.random.seed(0)
+            torch.manual_seed(0)
+            X = (torch.randn(D, N) > 0).float()
+            Y = torch.randn(2, D) @ X / np.sqrt(D)
+            fig, axs = plt.subplots(1, 4, figsize=(15, 5), sharex="all", sharey="all")
+            fig.suptitle(
+                f"Empirical validation of optimal solution ({N=}, {D=}, {K=})",
+                fontsize=20,
+            )
+            for i, l in enumerate([0.0, 0.1, 1, 10]):
+                optim = [np.inf]
+                for lr in [0.1, 0.01, 0.001, 0.0001]:
+                    sgd_loss, optimal = test_base(lr, l, 10000)
+                    if np.mean(sgd_loss[-300:]) < np.mean(optim[-300:]):
+                        optim = sgd_loss
+                axs[i].plot(optim - optimal)
+                axs[i].set_xlabel("steps (t)", fontsize=20)
+                axs[i].set_title(str(np.min(optim - optimal)))
+            axs[0].set_yscale("log")
+            axs[0].set_ylabel("log(loss(t) - loss*)", fontsize=20)
+            plt.tight_layout()
+            plt.savefig(f"validation_general_{K}_{N}_{D}.pdf")
+            plt.close()
+
+    plt.figure(figsize=(6, 6))
+    plt.title("Generalized solution")
+    for view in [1, 4, 8, 16]:
+        sgd_loss, optimal = test_generalized("gaussian-0.1", view)
+        print(optimal)
+        plt.semilogy(np.abs(sgd_loss - optimal))
+    plt.ylabel("log | loss(t) - loss* |")
+    plt.xlabel("sgd steps (t)")
     plt.tight_layout()
-    plt.savefig("validation_general.pdf")
-    plt.show()
-
-    # plt.figure(figsize=(6, 6))
-    # plt.title("Generalized solution")
-    # for view in [1, 4, 8, 16]:
-    #     sgd_loss, optimal = test_generalized("gaussian-0.1", view)
-    #     print(optimal)
-    #     plt.semilogy(np.abs(sgd_loss - optimal))
-    # plt.ylabel("log | loss(t) - loss* |")
-    # plt.xlabel("sgd steps (t)")
-    # plt.tight_layout()
-    # plt.show()
+    plt.savefig(f"validation_denoising_{K}_{N}_{D}.pdf")
+    plt.close()
