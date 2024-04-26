@@ -67,6 +67,20 @@ transform = v2.Compose(
 # dataset = ...
 ```
 
+## Supervised Guidance 
+
+To reproduce that experiment that shows how a given reconstruction error can be achieved by both an autoencoder with good perception performance and one with poor performance, simply take your favorite autoencoder training code and add a weighted (with a weight dneoted as `guidance`) supervised loss to it:
+```
+x, y = batch
+h = encoder(x)
+xrec = decoder(h)
+rec_loss = torch.nn.functional.mse_loss(xrec, x)
+yhat = self.probe(h)
+sup_loss = guidance * torch.nn.functional.cross_entropy(yhat, y)
+loss = rec_loss + sup_loss
+```
+where the weight `guidance` needs to be small enough to not impact the reconstruction performance.
+
 ## Autoencoder Architectures
 
 All the architectures used in the paper are provided within the [utils.py](utils.py) file:
