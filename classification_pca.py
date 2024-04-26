@@ -1,14 +1,6 @@
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import OrdinalEncoder
-import omega
 from torch import nn
 import torch
-import torchmetrics
 from torchvision import transforms
-from tqdm import tqdm
-from omega import pl
-
-plt.style.use("seaborn-v0_8-poster")
 
 
 class CustomDataset(torch.utils.data.Dataset):
@@ -99,74 +91,43 @@ class MLP(nn.Module):
         return encoded
 
 
-def normalize(X):
+def normalize(X, Xtest):
     X /= 1e-6 + X.std((1, 2, 3), keepdims=True)
+    if Xtest is not None:
+        Xtest /= 1e-6 + Xtest.std((1, 2, 3), keepdims=True)
+        Xtest -= X.mean(0)
     X -= X.mean(0)
-    return X
-
-
-class MyLightningModule(pl.Module):
-    def create_modules(self):
-        if self.arch == "MLP":
-            self.model = MLP(self.input_shape, self.outputs, depth=self.depth)
-        elif self.arch == "R9":
-            self.model = ResNet9(self.input_shape, self.outputs)
-
-    def create_metrics(self):
-        self.train_error = torchmetrics.classification.MulticlassAccuracy(
-            self.outputs[0]
-        )
-        self.val_metric = torchmetrics.classification.MulticlassAccuracy(
-            self.outputs[0]
-        )
-
-    def forward(self, x):
-        return self.model(x)
-
-    def compute_loss(self, batch, batch_idx):
-        x, y = batch
-        yhat = self.model(x)
-        if not self.training:
-            self.log("eval_accuracy", self.val_metric(yhat.argmax(1), y))
-        # return nn.functional.cross_entropy(yhat, y)
-        return nn.functional.mse_loss(
-            yhat, torch.nn.functional.one_hot(y, self.outputs[0]).float()
-        )
+    return X, Xtest
 
 
 if __name__ == "__main__":
     from argparse import ArgumentParser
     from pathlib import Path
     import numpy as np
-    import aidatasets
 
     parser = ArgumentParser()
     parser.add_argument("--path", type=Path, default=None)
     parser.add_argument("--arch", choices=["R9", "MLP"])
-    parser.add_argument("--plot", action="store_true")
     args = parser.parse_args()
-
-    K = 256
-    fig, axs = plt.subplots(2, 1, figsize=(7, 9))
 
     for da in [1, 0]:
         for dname in [
-            # "ArabicCharacters",
-            # "ArabicDigits",
-            # "SVHN",
-            # "fashionmnist",
-            # "CIFAR10",
+            "ArabicCharacters",
+            "ArabicDigits",
+            "SVHN",
+            "fashionmnist",
+            "CIFAR10",
             "CIFAR100",
-            # "emnist",
             "TinyImagenet",
         ]:
+            if dname == "arabic_characters" or dname == "arabic_digits":
+                epochs = 100
+            else:
+                epochs = 50
             if dname == "TinyImagenet":
-                dataset = aidatasets.images.__dict__[dname](
-                    "../../Downloads/", as_array=True
-                ).load()
-                X = dataset["train_X"]
-                del dataset
-                X = normalize(X)
+                # Load X only
+                # X = ....
+                X = normalize(X, None)[0]
                 X = np.transpose(X, (0, 3, 1, 2))
                 assert X.shape[1] == 3
                 X = X.reshape((X.shape[0], -1))
@@ -178,42 +139,25 @@ if __name__ == "__main__":
                 S = S.astype("float32")
                 print("eigh computed")
                 U /= U.sum()
-                dataset = aidatasets.images.__dict__[dname].load(
-                    "../../Downloads/", as_array=True
-                )
-                dataset["train"]["y"] = (
-                    OrdinalEncoder()
-                    .fit_transform(dataset["train"]["y"][:, None])
-                    .squeeze()
-                )
-                dataset["val"]["y"] = (
-                    OrdinalEncoder()
-                    .fit_transform(dataset["val"]["y"][:, None])
-                    .squeeze()
-                )
+                # Load X, y and Xtest, ytest as numpy arrays in RGB format with (N, H, W, C)
+                # X, y = ....
+                # Xtest, ytest = ...
             else:
-                dataset = aidatasets.images.__dict__[dname]("../Downloads/").load()
-            dataset.enforce_RGB()
-            X, y = dataset["train_X"].astype("float32"), dataset["train_y"]
-            Xtest, ytest = dataset["test_X"].astype("float32"), dataset["test_y"]
-            print(X.shape)
-            del dataset
-            X = normalize(X)
-            Xtest = normalize(Xtest)
+                # Load X, y and Xtest, ytest as numpy arrays in RGB format with (N, H, W, C)
+                # X, y = ....
+                # Xtest, ytest = ...
+            X, Xtest = normalize(X, Xtest)
             X = np.transpose(X, (0, 3, 1, 2))
             assert X.shape[1] == 3
-            Xtest = np.transpose(Xtest, (0, 3, 1, 2))
             X = X.reshape((X.shape[0], -1))
-            Xtest = Xtest.reshape((Xtest.shape[0], -1))
-            print(X.dtype)
+            Xtest = np.transpose(Xtest, (0, 3, 1, 2)).reshape((Xtest.shape[0], -1))
 
             if dname != "TinyImagenet":
                 U, S = np.linalg.eigh(X.T @ X)
                 U /= U.sum()
                 S = S.astype("float32")
             explained = np.cumsum(U[::-1])[::-1]
-            print(explained)
-            print(X.shape, U.shape, S.shape)
+
             for option in ["top", "bottom"]:
                 bounds = [explained[-2], explained[explained < 1].max()]
                 if option == "top":
@@ -223,7 +167,6 @@ if __name__ == "__main__":
                     grid *= bounds[1] - bounds[0]
                     grid += bounds[0]
                 for i, pct in enumerate([-1] + list(grid)):
-                    print(X.dtype, S.dtype)
                     if option == "top":
                         if pct == -1:
                             S_ = (
@@ -244,38 +187,19 @@ if __name__ == "__main__":
                         else:
                             S_ = S[:, explained >= pct] @ S[:, explained >= pct].T
                             dimensions = int((explained >= pct).astype("float").sum())
-                    print("matmul")
-                    np.matmul(X, S_, out=X)
-                    print("matmul")
-                    np.matmul(Xtest, S_, out=Xtest)
-                    del S_
-                    X = X.reshape((-1,) + (3, 32, 32))
-                    Xtest = Xtest.reshape((-1,) + (3, 32, 32))
-                    print("normalize")
-                    X = normalize(X)
-                    Xtest = normalize(Xtest)
 
+                    X_ = np.matmul(X, S_).reshape((-1,) + (3, 32, 32))
+                    Xtest_ = np.matmul(Xtest, S_).reshape((-1,) + (3, 32, 32))
+                    del S_
+                    X_, Xtest_ = normalize(X_, Xtest_)
                     path = (
                         args.path
                         / f"mse_classification_{dname.upper()}_{args.arch}_{da}"
                         / f"{option}_{i}"
                     )
 
-                    mymodule = MyLightningModule(
-                        outputs=(int(y.max()) + 1,),
-                        arch=args.arch,
-                        optimizer="AdamW",
-                        lr=0.001,
-                        weight_decay=0.001,
-                        scheduler="OneCycleLR",
-                        input_shape=(3, 32, 32),
-                        depth=4,
-                        pct=float(pct),
-                        dimensions=dimensions,
-                    )
-
                     trainset = CustomDataset(
-                        torch.from_numpy(X),
+                        torch.from_numpy(X_),
                         torch.from_numpy(y).long(),
                         transform=(
                             transforms.Compose(
@@ -303,39 +227,25 @@ if __name__ == "__main__":
                     )
 
                     testset = CustomDataset(
-                        torch.from_numpy(Xtest), torch.from_numpy(ytest).long()
+                        torch.from_numpy(Xtest_), torch.from_numpy(ytest).long()
                     )
                     testloader = torch.utils.data.DataLoader(
                         testset, batch_size=512, shuffle=False
                     )
-                    if dname == "arabic_characters" or dname == "arabic_digits":
-                        epochs = 100
-                    else:
-                        epochs = 50
-                    omega.pl.launch_worker(
-                        mymodule,
-                        path,
-                        train_dataloaders=trainloader,
-                        val_dataloaders=testloader,
-                        max_epochs=epochs,
-                        precision=16,
-                    )
-                    del X, Xtest, trainset, trainloader, testset, testloader
-                    if dname == "TinyImagenet":
-                        dataset = aidatasets.images.__dict__[dname](
-                            "../../Downloads/", as_array=True
-                        )
-                    else:
-                        dataset = aidatasets.images.__dict__[dname](
-                            "../Downloads/"
-                        ).load()
-                    dataset.enforce_RGB()
-                    X = dataset["train_X"].astype("float32")
-                    Xtest = dataset["test_X"].astype("float32")
-                    del dataset
-                    X = normalize(X)
-                    Xtest = normalize(Xtest)
-                    X = np.transpose(X, (0, 3, 1, 2))
-                    Xtest = np.transpose(Xtest, (0, 3, 1, 2))
-                    X = X.reshape((X.shape[0], -1))
-                    Xtest = Xtest.reshape((Xtest.shape[0], -1))
+                    
+                    # Launch  training with 
+                    # outputs=(int(y.max()) + 1,),
+                    # arch=args.arch,
+                    # optimizer="AdamW",
+                    # lr=0.001,
+                    # weight_decay=0.001,
+                    # scheduler="OneCycleLR",
+                    # input_shape=(3, 32, 32),
+                    # depth=4,
+                    # pct=float(pct),
+                    # dimensions=dimensions,
+                    # output_dir=path,
+                    # train_dataloaders=trainloader,
+                    # val_dataloaders=testloader,
+                    # max_epochs=epochs,
+                    # precision=16,

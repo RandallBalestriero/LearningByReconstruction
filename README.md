@@ -49,6 +49,7 @@ By default the code will use the following datasets (which can be modified witho
 - `FashionMNIST`
 - `CIFAR10`
 - `CIFAR100`
+
 and the code can be run with a single argument specifying where to dump the figures as in `python alignment.py --path PATH`
 
 ## PCA figures (bottom and top part)
@@ -65,6 +66,77 @@ transform = v2.Compose(
     ]
 )
 # dataset = ...
+```
+
+## Supervised Performance on PCA subspaces
+
+To reproduce the figures demonstrating the supervised performance of models on images projected on different PCA subspaces, we provide the [classification_pca.py](classification_pca.py) file. In works out of the box after adding a few lines to accomodate for one's dataloading and training pipeline.
+
+
+Add you own dataset loading pipeline that should return a numpy array at 
+- line 128:
+    ```
+    # Load X only
+    # X = ....
+    ```
+- line 142:
+    ```
+    # Load X, y and Xtest, ytest as numpy arrays in RGB format with (N, H, W, C)
+    # X, y = ....
+    # Xtest, ytest = ...
+    ```
+- line 146:
+    ```
+    # Load X, y and Xtest, ytest as numpy arrays in RGB format with (N, H, W, C)
+    # X, y = ....
+    # Xtest, ytest = ...
+    ```
+and launch your favorite supervised training pipeline in line 236 with parameters:
+```
+# outputs=(int(y.max()) + 1,),
+# arch=args.arch,
+# optimizer="AdamW",
+# lr=0.001,
+# weight_decay=0.001,
+# scheduler="OneCycleLR",
+# input_shape=(3, 32, 32),
+# depth=4,
+# pct=float(pct),
+# dimensions=dimensions,
+# output_dir=path,
+# train_dataloaders=trainloader,
+# val_dataloaders=testloader,
+# max_epochs=epochs,
+# precision=16,
+```
+in our case we leverage PytorchLIghtning with the following settings:
+```
+class MyLightningModule(pl.Module):
+    def create_modules(self):
+        if self.arch == "MLP":
+            self.model = MLP(self.input_shape, self.outputs, depth=self.depth)
+        elif self.arch == "R9":
+            self.model = ResNet9(self.input_shape, self.outputs)
+
+    def create_metrics(self):
+        self.train_error = torchmetrics.classification.MulticlassAccuracy(
+            self.outputs[0]
+        )
+        self.val_metric = torchmetrics.classification.MulticlassAccuracy(
+            self.outputs[0]
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+    def compute_loss(self, batch, batch_idx):
+        x, y = batch
+        yhat = self.model(x)
+        if not self.training:
+            self.log("eval_accuracy", self.val_metric(yhat.argmax(1), y))
+        return nn.functional.mse_loss(
+            yhat, torch.nn.functional.one_hot(y, self.outputs[0]).float()
+        )
 ```
 
 ## Supervised Guidance 
