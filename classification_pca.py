@@ -4,7 +4,6 @@ from torchvision import transforms
 
 
 class CustomDataset(torch.utils.data.Dataset):
-    """Face Landmarks dataset."""
 
     def __init__(self, X, y, transform=None):
         self.X = X
